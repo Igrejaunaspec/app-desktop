@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Sem permissões extras: o site não acessa arquivos nem o sistema do computador.",
+  "windows": ["main"],
+  "permissions": []
+}
