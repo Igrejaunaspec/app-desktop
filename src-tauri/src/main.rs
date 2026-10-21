@@ -46,6 +46,8 @@ fn abrir_no_navegador(url: &tauri::Url) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .register_uri_scheme_protocol("dialogo", |_ctx, req| {
             use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
             let msg = String::from_utf8_lossy(req.body()).to_string();
@@ -84,8 +86,36 @@ fn main() {
             #[cfg(target_os = "macos")]
             let janela = janela.initialization_script(DIALOGOS_JS);
             janela.build()?;
+            // procura versão nova do programa ao abrir
+            let h = app.handle().clone();
+            tauri::async_runtime::spawn(async move { procurar_atualizacao(h).await; });
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("erro ao abrir o programa");
+}
+
+// Atualização automática: confere no GitHub se há versão nova, pergunta e instala.
+// O pacote só é aceito se tiver a assinatura da chave da igreja (protege contra versões falsas).
+async fn procurar_atualizacao(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    let Ok(atualizador) = app.updater() else { return };
+    let Ok(Some(nova)) = atualizador.check().await else { return };
+    let versao = nova.version.clone();
+    let sim = rfd::AsyncMessageDialog::new()
+        .set_title("Igreja UNASP EC")
+        .set_description(format!("Há uma versão nova do programa ({versao}).\n\nAtualizar agora? Leva poucos segundos e o programa reabre sozinho."))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    if !matches!(sim, rfd::MessageDialogResult::Yes) { return; }
+    if nova.download_and_install(|_, _| {}, || {}).await.is_ok() {
+        app.restart();
+    } else {
+        rfd::AsyncMessageDialog::new()
+            .set_title("Igreja UNASP EC")
+            .set_description("Não consegui atualizar agora. Tente de novo mais tarde.")
+            .show()
+            .await;
+    }
 }
