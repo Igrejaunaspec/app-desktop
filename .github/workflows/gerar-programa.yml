@@ -4,6 +4,7 @@ name: Gerar programa
 on:
   push:
     branches: [main]
+    paths-ignore: ['nativo-mac/**', '.github/workflows/gerar-mac.yml', 'README.md']
   workflow_dispatch:
 
 permissions:
