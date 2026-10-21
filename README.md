@@ -6,7 +6,13 @@ Ele abre o app oficial numa janela própria. Não guarda senhas, chaves nem dado
 **Baixar:** veja a seção *Releases* ao lado →
 
 ### Primeira abertura no Mac
-O Mac avisa que não conseguiu verificar o desenvolvedor (o programa não é assinado pela Apple).
-1. Abra o programa uma vez e feche o aviso.
-2. Vá em **Ajustes do Sistema → Privacidade e Segurança** e clique em **Abrir mesmo assim**.
-Depois disso ele abre normalmente.
+O programa não é assinado pela Apple, então o Mac bloqueia na primeira vez.
+1. Abra o .dmg e arraste o programa para **Aplicativos**.
+2. Abra o **Terminal**, cole o comando abaixo e aperte Enter:
+   ```
+   xattr -cr "/Applications/Igreja UNASP EC.app"
+   ```
+3. Abra o programa normalmente. Só precisa fazer isso uma vez.
+
+### Windows
+Se aparecer "O Windows protegeu o computador", clique em **Mais informações → Executar assim mesmo**.
