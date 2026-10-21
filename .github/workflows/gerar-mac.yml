@@ -1,0 +1,38 @@
+# Gera o app nativo para Mac (.dmg) a cada envio de arquivos.
+name: Gerar app Mac
+on:
+  push:
+    branches: [main]
+    paths: ['nativo-mac/**', '.github/workflows/gerar-mac.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mac:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: nativo-mac
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar projeto
+        run: brew install xcodegen && xcodegen generate
+      - name: Compilar
+        run: |
+          xcodebuild -project IgrejaUNASP.xcodeproj -scheme IgrejaUNASP -configuration Release \
+            -derivedDataPath build ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO build | tail -40
+          test -d "build/Build/Products/Release/Igreja UNASP EC.app"
+      - name: Montar .dmg
+        run: |
+          codesign --force --deep -s - "build/Build/Products/Release/Igreja UNASP EC.app"
+          mkdir dmg && cp -R "build/Build/Products/Release/Igreja UNASP EC.app" dmg/ && ln -s /Applications dmg/Aplicativos
+          hdiutil create -volname "Igreja UNASP EC" -srcfolder dmg -ov -format UDZO "Igreja-UNASP-EC-Mac.dmg"
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "build/Build/Products/Release/Igreja UNASP EC.app/Contents/Info.plist")
+          TAG="v$V-${{ github.run_number }}"
+          gh release create "$TAG" "Igreja-UNASP-EC-Mac.dmg" --title "App Mac nativo $V (teste ${{ github.run_number }})" \
+            --notes "Versão de teste do app nativo para Mac. Depois de arrastar para Aplicativos, rode no Terminal: xattr -cr \"/Applications/Igreja UNASP EC.app\"" --prerelease
