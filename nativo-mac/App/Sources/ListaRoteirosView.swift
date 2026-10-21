@@ -7,56 +7,46 @@ struct ListaRoteirosView: View {
     @State private var aba = UserDefaults.standard.string(forKey: "abaRoteiros") ?? "culto"
     @State private var carregando = true
     @State private var erro: String?
-    @State private var abertos: Set<String> = []
+    @State private var abertos: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pastasAbertas") ?? [])
     @State private var editando: Roteiro?
     @State private var novaPastaNome = ""
     @State private var criandoPasta = false
+    @State private var busca = ""
+    @State private var alvoSoltar: String?
 
     static let abas: [(v: String, n: String, i: String)] = [("culto", "Culto de Sábado", "building.columns"), ("eventos", "Eventos", "calendar"), ("ja", "JA", "flame")]
     var comAbas: Bool { culto == "sabado" }
+    var titulo: String { culto == "sabado" ? "Roteiros" : "Culto de Sexta" }
 
     var body: some View {
-        Group {
-            if let r = editando {
-                EditorRoteiroView(roteiro: r) { editando = nil; Task { await carregar() } }
-            } else { lista }
-        }
+        if let r = editando {
+            EditorRoteiroView(roteiro: r) { editando = nil; Task { await carregar() } }
+        } else { lista }
     }
 
+    // MARK: tela
     var lista: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if comAbas {
-                Picker("", selection: $aba) {
-                    ForEach(Self.abas, id: \.v) { a in Label(a.n, systemImage: a.i).tag(a.v) }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 420)
-                .padding([.horizontal, .top], 16)
-                .onChange(of: aba) { v in UserDefaults.standard.set(v, forKey: "abaRoteiros") }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                cabecalho
+                if comAbas { seletorAbas }
+                if carregando { ProgressView().frame(maxWidth: .infinity).padding(40) }
+                else if let erro { Label(erro, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
+                else if !busca.isEmpty { resultadosBusca }
+                else { conteudo }
             }
-            if carregando { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let erro { Text(erro).foregroundStyle(.red).padding() }
-            else {
-                List {
-                    ForEach(raizes) { p in pastaView(p, nivel: 0) }
-                    let soltos = roteiros.filter { r in r.pastaId == nil || !pastas.contains { $0.id == r.pastaId } }
-                    if !comAbas || aba == "culto" {
-                        if !soltos.isEmpty {
-                            Section(pastas.isEmpty ? "" : "Sem pasta") { ForEach(soltos) { linha($0) } }
-                        }
-                    }
-                    if raizes.isEmpty && (comAbas && aba != "culto" || soltos.isEmpty) {
-                        Text("Nada aqui ainda. Crie com “Nova pasta” ou “Novo roteiro”.").foregroundStyle(.secondary)
-                    }
-                }
-                .listStyle(.inset(alternatesRowBackgrounds: false))
-            }
+            .padding(24)
+            .frame(maxWidth: 980)
+            .frame(maxWidth: .infinity)
         }
-        .navigationTitle(culto == "sabado" ? "Roteiros" : "Culto de Sexta")
+        .navigationTitle(titulo)
+        .searchable(text: $busca, placement: .toolbar, prompt: "Buscar roteiro")
         .toolbar {
             ToolbarItemGroup {
-                Button { Task { await carregar() } } label: { Label("Atualizar", systemImage: "arrow.clockwise") }
-                Button { criandoPasta = true } label: { Label("Nova pasta", systemImage: "folder.badge.plus") }
-                Button { Task { await novoRoteiro() } } label: { Label("Novo roteiro", systemImage: "plus") }.keyboardShortcut("n")
+                Button { Task { await carregar() } } label: { Label("Atualizar", systemImage: "arrow.clockwise") }.help("Atualizar")
+                Button { criandoPasta = true } label: { Label("Nova pasta", systemImage: "folder.badge.plus") }.help("Nova pasta")
+                Button { Task { await novoRoteiro() } } label: { Label("Novo roteiro", systemImage: "square.and.pencil") }
+                    .help("Novo roteiro (Cmd+N)").keyboardShortcut("n")
             }
         }
         .alert("Nova pasta", isPresented: $criandoPasta) {
@@ -67,10 +57,81 @@ struct ListaRoteirosView: View {
         .task { await carregar() }
     }
 
-    var raizes: [Pasta] {
+    var cabecalho: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(titulo).font(.largeTitle.bold())
+                Text("\(roteiros.count) roteiros · \(pastas.count) pastas · disponíveis para o programa do culto")
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button { Task { await novoRoteiro() } } label: { Label("Novo roteiro", systemImage: "plus") }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+        }
+    }
+
+    var seletorAbas: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.abas, id: \.v) { a in
+                let on = aba == a.v
+                Button { withAnimation(.easeOut(duration: 0.15)) { aba = a.v }; UserDefaults.standard.set(a.v, forKey: "abaRoteiros") } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: a.i)
+                        Text(a.n)
+                        Text("\(raizes(a.v).count)").font(.caption.bold()).padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Capsule().fill(on ? Color.white.opacity(0.25) : Color.primary.opacity(0.08)))
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .foregroundStyle(on ? Color.white : Color.primary)
+                    .background(Capsule().fill(on ? Tema.azul : Color.primary.opacity(0.05)))
+                    .overlay(Capsule().strokeBorder(alvoSoltar == "aba-" + a.v ? Tema.dourado : .clear, lineWidth: 2))
+                }
+                .buttonStyle(.plain)
+                .dropDestination(for: String.self) { ids, _ in
+                    guard let id = ids.first, id.hasPrefix("pasta:") else { return false }
+                    Task { await moverPastaAba(String(id.dropFirst(6)), a.v) }; return true
+                } isTargeted: { alvoSoltar = $0 ? "aba-" + a.v : (alvoSoltar == "aba-" + a.v ? nil : alvoSoltar) }
+            }
+        }
+    }
+
+    @ViewBuilder var conteudo: some View {
+        let rz = raizes(aba)
+        let soltos = roteiros.filter { r in r.pastaId == nil || !pastas.contains { $0.id == r.pastaId } }
+        let mostraSoltos = (!comAbas || aba == "culto") && !soltos.isEmpty
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(rz) { pastaView($0, nivel: 0) }
+        }
+        if mostraSoltos {
+            VStack(alignment: .leading, spacing: 8) {
+                if !rz.isEmpty { Text("SEM PASTA").font(.caption.bold()).foregroundStyle(.secondary).padding(.top, 6) }
+                ForEach(soltos) { linha($0) }
+            }
+        }
+        if rz.isEmpty && !mostraSoltos {
+            VStack(spacing: 10) {
+                Image(systemName: "folder").font(.system(size: 40)).foregroundStyle(.tertiary)
+                Text("Nada nesta aba ainda").font(.headline)
+                Text("Crie uma pasta, ou arraste uma pasta de outra aba até o nome desta aba.").foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity).padding(50)
+        }
+    }
+
+    var resultadosBusca: some View {
+        let t = busca.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+        let achados = roteiros.filter { $0.nome.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil).contains(t) }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("\(achados.count) resultado(s)").font(.caption.bold()).foregroundStyle(.secondary)
+            ForEach(achados) { linha($0, mostrarPasta: true) }
+        }
+    }
+
+    // MARK: pastas e roteiros
+    func raizes(_ a: String) -> [Pasta] {
         pastas.filter { p in p.paiId == nil || !pastas.contains { $0.id == p.paiId } }
-            .filter { !comAbas || $0.aba == aba }
-            .sorted { $0.nome.localizedCompare($1.nome) == .orderedAscending }
+            .filter { !comAbas || $0.aba == a }
+            .sorted { $0.nome.localizedStandardCompare($1.nome) == .orderedAscending }
     }
 
     func total(_ p: Pasta) -> Int {
@@ -78,46 +139,85 @@ struct ListaRoteirosView: View {
     }
 
     func pastaView(_ p: Pasta, nivel: Int) -> AnyView {
-        let subs = pastas.filter { $0.paiId == p.id }.sorted { $0.nome.localizedCompare($1.nome) == .orderedAscending }
+        let subs = pastas.filter { $0.paiId == p.id }.sorted { $0.nome.localizedStandardCompare($1.nome) == .orderedAscending }
         let itens = roteiros.filter { $0.pastaId == p.id }
-        let binding = Binding(get: { abertos.contains(p.id) }, set: { if $0 { abertos.insert(p.id) } else { abertos.remove(p.id) } })
-        return AnyView(DisclosureGroup(isExpanded: binding) {
-            if nivel < 20 { ForEach(subs) { pastaView($0, nivel: nivel + 1) } }
-            ForEach(itens) { linha($0) }
-        } label: {
-            HStack {
-                Label(p.nome, systemImage: binding.wrappedValue ? "folder.fill" : "folder").font(.headline)
-                Spacer()
-                Text("\(total(p)) \(total(p) == 1 ? "roteiro" : "roteiros")").font(.caption).foregroundStyle(.secondary)
+        let aberta = abertos.contains(p.id)
+        let n = total(p)
+        return AnyView(VStack(alignment: .leading, spacing: 8) {
+            Cartao(destaque: alvoSoltar == p.id) {
+                HStack(spacing: 12) {
+                    Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(aberta ? 90 : 0))
+                    Image(systemName: aberta ? "folder.fill" : "folder.fill").font(.title2)
+                        .foregroundStyle(nivel == 0 ? Tema.dourado : Tema.azulClaro)
+                    Text(p.nome).font(.headline)
+                    Spacer()
+                    Text("\(n) \(n == 1 ? "roteiro" : "roteiros")").font(.callout).foregroundStyle(.secondary)
+                }
             }
-            .contentShape(Rectangle())
-            .dropDestination(for: String.self) { ids, _ in Task { await mover(ids, para: p.id) }; return true }
+            .onTapGesture {
+                withAnimation(.easeOut(duration: 0.18)) { if aberta { abertos.remove(p.id) } else { abertos.insert(p.id) } }
+                UserDefaults.standard.set(Array(abertos), forKey: "pastasAbertas")
+            }
+            .draggable("pasta:" + p.id)
+            .dropDestination(for: String.self) { ids, _ in
+                let rs = ids.filter { !$0.hasPrefix("pasta:") }
+                guard !rs.isEmpty else { return false }
+                Task { await mover(rs, para: p.id) }; return true
+            } isTargeted: { alvoSoltar = $0 ? p.id : (alvoSoltar == p.id ? nil : alvoSoltar) }
             .contextMenu {
                 if comAbas && nivel == 0 {
                     Menu("Mover para a aba") {
-                        ForEach(Self.abas, id: \.v) { a in Button(a.n) { Task { await moverPastaAba(p, a.v) } } }
+                        ForEach(Self.abas, id: \.v) { a in Button(a.n) { Task { await moverPastaAba(p.id, a.v) } } }
                     }
                 }
+            }
+            if aberta {
+                VStack(alignment: .leading, spacing: 8) {
+                    if nivel < 20 { ForEach(subs) { pastaView($0, nivel: nivel + 1) } }
+                    ForEach(itens) { linha($0) }
+                    if subs.isEmpty && itens.isEmpty {
+                        Text("Pasta vazia — arraste um roteiro até ela.").font(.callout).foregroundStyle(.secondary).padding(.leading, 6)
+                    }
+                }
+                .padding(.leading, 22)
+                .overlay(alignment: .leading) { Rectangle().fill(Color.primary.opacity(0.08)).frame(width: 2).padding(.leading, 8) }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         })
     }
 
-    func linha(_ r: Roteiro) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(r.nome).font(.body.weight(.semibold))
-                Text("\(r.qtdItens) \(r.qtdItens == 1 ? "item" : "itens") · atualizado \(r.atualizadoEm)\(r.atualizadoPor.isEmpty ? "" : " por " + r.atualizadoPor)")
+    func linha(_ r: Roteiro, mostrarPasta: Bool = false) -> some View {
+        Cartao {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.text.fill").font(.title3).foregroundStyle(Tema.destaque.opacity(0.8))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(r.nome).font(.body.weight(.semibold))
+                    HStack(spacing: 6) {
+                        Text("\(r.qtdItens) \(r.qtdItens == 1 ? "item" : "itens")")
+                        Text("·")
+                        Text("atualizado \(r.atualizadoEm)")
+                        if !r.atualizadoPor.isEmpty { Text("por \(r.atualizadoPor)").lineLimit(1) }
+                        if mostrarPasta, let pid = r.pastaId, let p = pastas.first(where: { $0.id == pid }) {
+                            Label(p.nome, systemImage: "folder").labelStyle(.titleAndIcon)
+                        }
+                    }
                     .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
             }
-            Spacer()
-            Button("Abrir") { editando = r }.buttonStyle(.borderedProminent).controlSize(.small)
         }
-        .padding(.vertical, 3)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) { editando = r }
+        .onTapGesture { editando = r }
         .draggable(r.id)
+        .contextMenu {
+            Button("Abrir") { editando = r }
+            Button("Duplicar") { Task { await duplicar(r) } }
+            if r.pastaId != nil { Button("Tirar da pasta") { Task { await mover([r.id], para: nil) } } }
+        }
     }
 
+    // MARK: banco
     func carregar() async {
         do {
             async let a = Supabase.shared.api("roteiros?culto=eq.\(culto)&select=*&order=atualizado_em.desc")
@@ -130,16 +230,16 @@ struct ListaRoteirosView: View {
         carregando = false
     }
 
-    func mover(_ ids: [String], para pasta: String) async {
+    func mover(_ ids: [String], para pasta: String?) async {
         for id in ids {
-            _ = try? await Supabase.shared.api("roteiros?id=eq.\(id.urlq)", metodo: "PATCH", corpo: .object(["pasta_id": .string(pasta)]), prefer: "return=minimal")
+            _ = try? await Supabase.shared.api("roteiros?id=eq.\(id.urlq)", metodo: "PATCH", corpo: .object(["pasta_id": pasta.map { .string($0) } ?? .null]), prefer: "return=minimal")
         }
-        abertos.insert(pasta)
+        if let pasta { abertos.insert(pasta) }
         await carregar()
     }
 
-    func moverPastaAba(_ p: Pasta, _ nova: String) async {
-        _ = try? await Supabase.shared.api("pastas?id=eq.\(p.id.urlq)", metodo: "PATCH", corpo: .object(["aba": .string(nova)]), prefer: "return=minimal")
+    func moverPastaAba(_ id: String, _ nova: String) async {
+        _ = try? await Supabase.shared.api("pastas?id=eq.\(id.urlq)", metodo: "PATCH", corpo: .object(["aba": .string(nova)]), prefer: "return=minimal")
         await carregar()
     }
 
@@ -149,6 +249,15 @@ struct ListaRoteirosView: View {
         var corpo: [String: JSON] = ["culto": .string(culto), "nome": .string(nome)]
         if comAbas && aba != "culto" { corpo["aba"] = .string(aba) }
         do { try await Supabase.shared.api("pastas", metodo: "POST", corpo: .object(corpo)); await carregar() }
+        catch { erro = error.localizedDescription }
+    }
+
+    func duplicar(_ r: Roteiro) async {
+        var corpo: [String: JSON] = ["culto": .string(r.culto), "nome": .string(r.nome + " (cópia)"), "publicado": .bool(true)]
+        corpo["dados"] = r.dados["dados"] ?? .object([:])
+        corpo["titulo"] = r.dados["titulo"] ?? .null
+        if let p = r.pastaId { corpo["pasta_id"] = .string(p) }
+        do { try await Supabase.shared.api("roteiros", metodo: "POST", corpo: .object(corpo)); await carregar() }
         catch { erro = error.localizedDescription }
     }
 

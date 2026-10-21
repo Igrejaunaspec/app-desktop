@@ -14,6 +14,7 @@ struct IgrejaApp: App {
             .environmentObject(estado)
             .environmentObject(supa)
             .frame(minWidth: 900, minHeight: 560)
+            .tint(Tema.destaque)
         }
         .windowToolbarStyle(.unified)
     }
