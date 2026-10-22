@@ -29,6 +29,24 @@ const DIALOGOS_JS: &str = r#"
 
 const SITE: &str = "https://igrejaunaspec.com/";
 
+// Sai do login sozinho depois de 1 hora SEM USO no programa (sem mexer mouse/teclado).
+// Também vale se o programa ficou fechado mais de 1 hora: ao abrir, pede o login de novo.
+// Só existe no programa; o site no navegador continua igual.
+const SAIDA_AUTOMATICA_JS: &str = r#"
+(function(){
+  if(location.hostname.indexOf('igrejaunaspec.com') === -1) return;
+  var LIMITE = 60 * 60 * 1000, CHAVE = 'roteiroEditor.sessao', USO = 'programa.ultimoUso', ultimo = 0;
+  function agora(){ return Date.now(); }
+  function lerUso(){ try{ return Number(localStorage.getItem(USO)) || 0; }catch(e){ return 0; } }
+  function marcar(){ var t = agora(); if(t - ultimo < 5000) return; ultimo = t; try{ localStorage.setItem(USO, String(t)); }catch(e){} }
+  function sair(){ try{ localStorage.removeItem(CHAVE); localStorage.setItem(USO, String(agora())); }catch(e){} location.reload(); }
+  try{ if(localStorage.getItem(CHAVE) && lerUso() && agora() - lerUso() > LIMITE){ sair(); return; } }catch(e){}
+  marcar();
+  ['mousemove','mousedown','keydown','wheel','touchstart'].forEach(function(ev){ addEventListener(ev, marcar, { passive:true, capture:true }); });
+  setInterval(function(){ try{ if(localStorage.getItem(CHAVE) && agora() - lerUso() > LIMITE) sair(); }catch(e){} }, 30000);
+})();
+"#;
+
 // endereços que podem abrir dentro da janela do programa
 fn eh_do_app(url: &tauri::Url) -> bool {
     match url.host_str() {
@@ -83,6 +101,7 @@ fn main() {
                     if eh_do_app(url) { true } else { abrir_no_navegador(url); false }
                 })
                 ;
+            let janela = janela.initialization_script(SAIDA_AUTOMATICA_JS);
             #[cfg(target_os = "macos")]
             let janela = janela.initialization_script(DIALOGOS_JS);
             janela.build()?;
